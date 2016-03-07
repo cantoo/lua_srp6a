@@ -9,8 +9,6 @@
 
 #include <openssl/srp.h>
 #include <openssl/rand.h>
-#include <openssl/err.h>
-#include <openssl/asn1.h>
 
 static int srp_get_default_gN(lua_State* L)
 {
@@ -425,7 +423,7 @@ static int srp_Calc_server_key(lua_State* L)
 {
     if(lua_gettop(L) < 5)
     {
-        return luaL_error(L, "Calc_server_key require A, B, v, b, N");
+        return luaL_error(L, "Calc_server_key require A, B, N, v, b");
     }
 
     int ret = 1;
@@ -450,21 +448,21 @@ static int srp_Calc_server_key(lua_State* L)
         goto err;
     }
 
-    if(!lua_isstring(L, 3) || !BN_hex2bn(&v, lua_tostring(L, 3)))
+    if(!lua_isstring(L, 3) || !BN_hex2bn(&N, lua_tostring(L, 3)))
+    {
+        ret = luaL_error(L, "Calc_server_key invalid N");
+        goto err;
+    }
+	
+    if(!lua_isstring(L, 4) || !BN_hex2bn(&v, lua_tostring(L, 4)))
     {
         ret = luaL_error(L, "Calc_server_key invalid v");
         goto err;
     }
 
-    if(!lua_isstring(L, 4) || !BN_hex2bn(&b, lua_tostring(L, 4)))
+    if(!lua_isstring(L, 5) || !BN_hex2bn(&b, lua_tostring(L, 5)))
     {
         ret = luaL_error(L, "Calc_server_key invalid b");
-        goto err;
-    }
-
-    if(!lua_isstring(L, 5) || !BN_hex2bn(&N, lua_tostring(L, 5)))
-    {
-        ret = luaL_error(L, "Calc_server_key invalid N");
         goto err;
     }
 
