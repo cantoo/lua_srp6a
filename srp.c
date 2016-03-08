@@ -9,6 +9,8 @@
 
 #include <openssl/srp.h>
 #include <openssl/rand.h>
+#include <openssl/evp.h>
+# include <openssl/sha.h>
 
 static int srp_get_default_gN(lua_State* L)
 {
@@ -502,6 +504,229 @@ err:
     return ret;
 };
 
+BIGNUM* SRP_Calc_M1(BIGNUM* N, BIGNUM* g, const char* username, BIGNUM* s, BIGNUM* A, BIGNUM* B, BIGNUM* K)
+{
+    /* H[H(N) XOR H(g) | H(username) | s | A | B | K] */
+    unsigned char* tmp = NULL;
+    unsigned char dig[SHA_DIGEST_LENGTH];
+    unsigned char digg[SHA_DIGEST_LENGTH];
+    EVP_MD_CTX ctxt;
+
+    if((tmp = OPENSSL_malloc(BN_num_bytes(N))) == NULL)
+    {
+        return NULL;
+    }
+
+    // H(N)
+    EVP_MD_CTX_init(&ctxt);
+    EVP_DigestInit_ex(&ctxt, EVP_sha1(), NULL);
+    BN_bn2bin(N, tmp);
+    EVP_DigestUpdate(&ctxt, tmp, BN_num_bytes(N));
+    EVP_DigestFinal_ex(&ctxt, dig, NULL);
+
+    EVP_DigestInit_ex(&ctxt, EVP_sha1(), NULL);
+    BN_bn2bin(g, tmp);
+    EVP_DigestUpdate(&ctxt, tmp, BN_num_bytes(g));
+    EVP_DigestFinal_ex(&ctxt, digg, NULL);
+
+    // H(N) ^ H(g)
+    int i = 0;
+    for(; i < SHA_DIGEST_LENGTH; ++i)
+    {
+        dig[i] ^= digg[i];
+    }
+
+    EVP_DigestInit_ex(&ctxt, EVP_sha1(), NULL);
+    EVP_DigestUpdate(&ctxt, dig, sizeof(dig));
+    BN_bn2bin(s, tmp);
+    EVP_DigestUpdate(&ctxt, tmp, BN_num_bytes(s));
+    BN_bn2bin(A, tmp);
+    EVP_DigestUpdate(&ctxt, tmp, BN_num_bytes(A));
+    BN_bn2bin(B, tmp);
+    EVP_DigestUpdate(&ctxt, tmp, BN_num_bytes(B));
+    BN_bn2bin(K, tmp);
+    EVP_DigestUpdate(&ctxt, tmp, BN_num_bytes(K));
+    EVP_DigestFinal_ex(&ctxt, dig, NULL);
+    EVP_MD_CTX_cleanup(&ctxt);
+
+    OPENSSL_free(tmp);
+    return BN_bin2bn(dig, sizeof(dig), NULL);
+};
+
+static int srp_Calc_M1(lua_State* L)
+{
+    /* BIGNUM* N, BIGNUM* g, const char* username, BIGNUM* s, BIGNUM* A, BIGNUM* B, BIGNUM* K */
+    if(lua_gettop(L) < 7)
+    {
+        return luaL_error(L, "Calc_M1 require N, g, username, s, A, B, K");
+    }
+
+    int ret = 1;
+    BIGNUM* M1 = NULL;
+    BIGNUM* N = NULL;
+    BIGNUM* g = BN_new();
+    char username[4096] = {0};
+    BIGNUM* s = NULL;
+    BIGNUM* A = NULL;
+    BIGNUM* B = NULL;
+    BIGNUM* K = NULL;
+    char* strM1 = NULL;
+
+    if(!lua_isstring(L, 1) || !BN_hex2bn(&N, lua_tostring(L, 1)))
+    {
+        ret = luaL_error(L, "Calc_M1 invalid N");
+        goto err;
+    }
+
+    if(!lua_isnumber(L, 2) || !BN_set_word(g, lua_tonumber(L, 2)))
+    {
+        ret = luaL_error(L, "Calc_M1 invalid g");
+        goto err;
+    }
+
+    if(!lua_isstring(L, 3))
+    {
+        ret = luaL_error(L, "Calc_M1 invalid username");
+        goto err;
+    }
+    
+    strncpy(username, lua_tostring(L, 3), sizeof(username));
+
+    if(!lua_isstring(L, 4) || !BN_hex2bn(&s, lua_tostring(L, 4)))
+    {
+        ret = luaL_error(L, "Calc_M1 invalid s");
+        goto err;
+    }
+
+    if(!lua_isstring(L, 5) || !BN_hex2bn(&A, lua_tostring(L, 5)))
+    {
+        ret = luaL_error(L, "Calc_M1 invalid A");
+        goto err;
+    }
+
+    if(!lua_isstring(L, 6) || !BN_hex2bn(&B, lua_tostring(L, 6)))
+    {
+        ret = luaL_error(L, "Calc_M1 invalid B");
+        goto err;
+    }
+
+    if(!lua_isstring(L, 7) || !BN_hex2bn(&K, lua_tostring(L, 7)))
+    {
+        ret = luaL_error(L, "Calc_M1 invalid K");
+        goto err;
+    }
+
+    if((M1 = SRP_Calc_M1(N, g, username, s, A, B, K)) == NULL)
+    {
+        ret = luaL_error(L, "Calc_M1 SRP_Calc_M1 failed");
+        goto err;
+    }
+
+    strM1 = BN_bn2hex(M1);
+    if(strM1 == NULL)
+    {
+        ret = luaL_error(L, "Calc_M1 BN_bin2hex M1 failed");
+        goto err;
+    }
+
+    lua_pushstring(L, strM1);
+
+err:
+    BN_free(M1);
+    BN_free(N);
+    BN_free(g);
+    BN_free(s);
+    BN_free(A);
+    BN_free(B);
+    BN_free(K);
+    OPENSSL_free(strM1);
+    return ret;
+};
+
+BIGNUM* SRP_Calc_M2(BIGNUM* A, BIGNUM* M1, BIGNUM* K)
+{
+    /* H(A | M1 | K) */
+    unsigned char* tmp = NULL;
+    unsigned char dig[SHA_DIGEST_LENGTH];
+    EVP_MD_CTX ctxt;
+
+    if((tmp = OPENSSL_malloc(BN_num_bytes(K))) == NULL)
+    {
+        return NULL;
+    }
+
+    EVP_MD_CTX_init(&ctxt);
+    EVP_DigestInit_ex(&ctxt, EVP_sha1(), NULL);
+    BN_bn2bin(A, tmp);
+    EVP_DigestUpdate(&ctxt, tmp, BN_num_bytes(A));
+    BN_bn2bin(M1, tmp);
+    EVP_DigestUpdate(&ctxt, tmp, BN_num_bytes(M1));
+    BN_bn2bin(K, tmp);
+    EVP_DigestUpdate(&ctxt, tmp, BN_num_bytes(K));
+    EVP_DigestFinal_ex(&ctxt, dig, NULL);
+    EVP_MD_CTX_cleanup(&ctxt);
+
+    OPENSSL_free(tmp);
+    return BN_bin2bn(dig, sizeof(dig), NULL);
+};
+
+static int srp_Calc_M2(lua_State* L)
+{
+    /* BIGNUM* A, BIGNUM* M1, BIGNUM* K */
+    if(lua_gettop(L) < 3)
+    {
+        return luaL_error(L, "Calc_M2 require A, M1, K");
+    }
+
+    int ret = 1;
+    BIGNUM* M2 = NULL;
+    BIGNUM* A = NULL;
+    BIGNUM* M1 = NULL;
+    BIGNUM* K = NULL;
+    char* strM2 = NULL;
+
+    if(!lua_isstring(L, 1) || !BN_hex2bn(&A, lua_tostring(L, 1)))
+    {
+        ret = luaL_error(L, "Calc_M2 invalid A");
+        goto err;
+    }
+
+    if(!lua_isstring(L, 2) || !BN_hex2bn(&M1, lua_tostring(L, 2)))
+    {
+        ret = luaL_error(L, "Calc_M2 invalid M1");
+        goto err;
+    }
+
+    if(!lua_isstring(L, 3) || !BN_hex2bn(&K, lua_tostring(L, 3)))
+    {
+        ret = luaL_error(L, "Calc_M2 invalid K");
+        goto err;
+    }
+
+    if((M2 = SRP_Calc_M2(A, M1, K)) == NULL)
+    {
+        ret = luaL_error(L, "Calc_M2 SRP_Calc_M2 failed");
+        goto err;
+    }
+
+    strM2 = BN_bn2hex(M2);
+    if(strM2 == NULL)
+    {
+        ret = luaL_error(L, "Calc_M2 BN_bin2hex M2 failed");
+        goto err;
+    }
+
+    lua_pushstring(L, strM2);
+
+err:
+    BN_free(M2);
+    BN_free(A);
+    BN_free(M1);
+    BN_free(K);
+    OPENSSL_free(strM2);
+    return ret;
+};
+
 static const luaL_reg srp_lib[] = {
     { "get_default_gN", srp_get_default_gN },
     { "RAND_pseudo_bytes", srp_RAND_pseudo_bytes },
@@ -511,6 +736,8 @@ static const luaL_reg srp_lib[] = {
     { "Calc_B", srp_Calc_B },
     { "Calc_client_key", srp_Calc_client_key },
     { "Calc_server_key", srp_Calc_server_key },
+    { "Calc_M1", srp_Calc_M1 },
+    { "Calc_M2", srp_Calc_M2 },
     { NULL, NULL }
 };
 
