@@ -52,7 +52,7 @@ Client verify M2 match
 
 I strongly recommend using lua_srp6a with [openresty](https://github.com/openresty/lua-nginx-module) for remote password verification.
 
-Reference:
+# Reference:
 
 [SRP6a wiki](https://en.wikipedia.org/wiki/Secure_Remote_Password_protocol)
 
