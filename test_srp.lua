@@ -27,3 +27,8 @@ print("Kclient: " .. Kclient);
 local Kserver = srp.Calc_server_key(A, B, N, v, b);
 print("Kserver: " .. Kserver);
 
+local M1 = srp.Calc_M1(N, g, username, s, A, B, Kclient);
+print("M1: " .. M1)
+
+local M2 = srp.Calc_M2(A, M1, Kserver)
+print("M2: " .. M2)
