@@ -1,7 +1,9 @@
 # lua_srp6a
 Provide a shared library for lua which contains the openssl srp6a implemention. And add the calculation of M1, M2 which openssl do not provide.
 
-I strongly recommend using lua_srp6a with [openresty](https://github.com/openresty/lua-nginx-module) for remote password verification.
+Please run test_srp.lua to see the password verification process between client and server.
+
+[Openresty](https://github.com/openresty/lua-nginx-module) is strongly recommended working with lua_srp6a, you will see how easily make a web server with openresty and how easily make a secure password verification with lua_srp6a.
 
 # Reference:
 
