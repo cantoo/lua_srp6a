@@ -14,11 +14,11 @@
 
 static int srp_get_default_gN(lua_State* L)
 {
-    char N_num_bits[4] = "1024";
+    char N_num_bits[] = "1024";
     if(lua_gettop(L) >= 1 && lua_isstring(L, 1))
     {
         memset(N_num_bits, 0, sizeof(N_num_bits));
-        strncpy(N_num_bits, lua_tostring(L, 1), sizeof(N_num_bits));
+        strncpy(N_num_bits, lua_tostring(L, 1), sizeof(N_num_bits) - 1);
     }
 
     SRP_gN *GN = SRP_get_default_gN(N_num_bits);
