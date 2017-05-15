@@ -1,5 +1,5 @@
-// gcc -O3 -Wall -I/data/lib/include -I/data/app/nginx/luajit/include/luajit-2.0/ -c srp.c
-// gcc -shared -fPIC srp.o /usr/local/lib/liblua.a /data/lib/lib/libcrypto.a -o srp.so
+// gcc -fPIC -O3 -Wall -I/usr/local/ssl/include -I/usr/local/openresty/luajit/include/luajit-2.1/ -c srp.c  
+// gcc -shared -fPIC srp.o /usr/local/openresty/luajit/lib/libluajit-5.1.so /usr/local/ssl/lib/libcrypto.a -o srp.so
 
 #include <stdlib.h>
 
@@ -14,14 +14,18 @@
 
 static int srp_get_default_gN(lua_State* L)
 {
-    char N_num_bits[] = "1024";
+    SRP_gN* GN = NULL;
+    char N_num_bits[5] = {0};
     if(lua_gettop(L) >= 1 && lua_isstring(L, 1))
     {
-        memset(N_num_bits, 0, sizeof(N_num_bits));
-        strncpy(N_num_bits, lua_tostring(L, 1), sizeof(N_num_bits) - 1);
+        strncpy(N_num_bits, lua_tostring(L, 1), sizeof(N_num_bits));
+        GN = SRP_get_default_gN(N_num_bits);
+    }
+    else
+    {
+        GN = SRP_get_default_gN(NULL);
     }
 
-    SRP_gN *GN = SRP_get_default_gN(N_num_bits);
     if(GN == NULL)
     {
         return luaL_error(L, "get_default_gN failed");
@@ -108,14 +112,13 @@ static int srp_create_verifier(lua_State* L)
         return luaL_error(L, "create_verifier require username, passwd, N, g");
     }
 
-    int ret = 2;
+    int ret = 1;
     char username[4096] = {0};
     char passwd[4096] = {0};
+    BIGNUM* s = NULL;
     BIGNUM* N = NULL;
     BIGNUM* g = BN_new();
-    BIGNUM* s = NULL;
     BIGNUM* v = NULL;
-    char* strs = NULL;
     char* strv = NULL;
 
     if(!lua_isstring(L, 1))
@@ -134,13 +137,19 @@ static int srp_create_verifier(lua_State* L)
 
     strncpy(passwd, lua_tostring(L, 2), sizeof(passwd));
 
-    if(!lua_isstring(L, 3) || !BN_hex2bn(&N, lua_tostring(L, 3)))
+    if(!lua_isstring(L, 3) || !BN_hex2bn(&s, lua_tostring(L, 3)))
+    {
+        ret = luaL_error(L, "create_verifier invalid s");
+        goto err;
+    }
+
+    if(!lua_isstring(L, 4) || !BN_hex2bn(&N, lua_tostring(L, 4)))
     {
         ret = luaL_error(L, "create_verifier invalid N");
         goto err;
     }
 
-    if(!lua_isnumber(L, 4) || !BN_set_word(g, lua_tonumber(L, 4)))
+    if(!lua_isnumber(L, 5) || !BN_set_word(g, lua_tonumber(L, 5)))
     {
         ret = luaL_error(L, "create_verifier invalid g");
         goto err;
@@ -152,13 +161,6 @@ static int srp_create_verifier(lua_State* L)
         goto err;
     }
 
-    strs = BN_bn2hex(s);
-    if(strs == NULL)
-    {
-        ret = luaL_error(L, "create_verifier BN_bin2hex s failed");
-        goto err;
-    }
-
     strv = BN_bn2hex(v);
     if(strv == NULL)
     {
@@ -166,15 +168,13 @@ static int srp_create_verifier(lua_State* L)
         goto err;
     }
 
-    lua_pushstring(L, strs);
     lua_pushstring(L, strv);
 
 err:
+    BN_free(s);
     BN_free(N);
     BN_free(g);
-    BN_free(s);
     BN_free(v);
-    OPENSSL_free(strs);
     OPENSSL_free(strv);
     return ret;
 };
@@ -510,6 +510,7 @@ BIGNUM* SRP_Calc_M1(BIGNUM* N, BIGNUM* g, const char* username, BIGNUM* s, BIGNU
     unsigned char* tmp = NULL;
     unsigned char dig[SHA_DIGEST_LENGTH];
     unsigned char digg[SHA_DIGEST_LENGTH];
+    unsigned char digu[SHA_DIGEST_LENGTH];
     EVP_MD_CTX ctxt;
 
     if((tmp = OPENSSL_malloc(BN_num_bytes(N))) == NULL)
@@ -524,6 +525,7 @@ BIGNUM* SRP_Calc_M1(BIGNUM* N, BIGNUM* g, const char* username, BIGNUM* s, BIGNU
     EVP_DigestUpdate(&ctxt, tmp, BN_num_bytes(N));
     EVP_DigestFinal_ex(&ctxt, dig, NULL);
 
+    // H(g)
     EVP_DigestInit_ex(&ctxt, EVP_sha1(), NULL);
     BN_bn2bin(g, tmp);
     EVP_DigestUpdate(&ctxt, tmp, BN_num_bytes(g));
@@ -536,8 +538,14 @@ BIGNUM* SRP_Calc_M1(BIGNUM* N, BIGNUM* g, const char* username, BIGNUM* s, BIGNU
         dig[i] ^= digg[i];
     }
 
+    // H(username)
+    EVP_DigestInit_ex(&ctxt, EVP_sha1(), NULL);
+    EVP_DigestUpdate(&ctxt, username, strlen(username));
+    EVP_DigestFinal_ex(&ctxt, digu, NULL);
+
     EVP_DigestInit_ex(&ctxt, EVP_sha1(), NULL);
     EVP_DigestUpdate(&ctxt, dig, sizeof(dig));
+    EVP_DigestUpdate(&ctxt, digu, sizeof(digu));
     BN_bn2bin(s, tmp);
     EVP_DigestUpdate(&ctxt, tmp, BN_num_bytes(s));
     BN_bn2bin(A, tmp);
@@ -727,7 +735,7 @@ err:
     return ret;
 };
 
-static const luaL_reg srp_lib[] = {
+static const luaL_Reg srp_lib[] = {
     { "get_default_gN", srp_get_default_gN },
     { "RAND_pseudo_bytes", srp_RAND_pseudo_bytes },
     { "Verify_mod_N", srp_Verify_mod_N },
